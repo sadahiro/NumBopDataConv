@@ -1,0 +1,403 @@
+//============================================================================
+// Name        : NumBopAnalysis.cpp
+// Author      : Makoto Sadahiro
+// Version     : build date is automatically updated in the run message
+// Copyright   : Texas Advanced Computing Center
+// Description : Parser from curr NumBop format to something easier to read
+//             : This is a version that includes an global movement ID for each user
+//             : This is new interpretation that stational manupulative has right angle lines
+//             : This is a version that creates vtk ascii format file
+//             : This traces each manipulative with timeline
+//============================================================================
+
+//#include <cstdio>	// needed for itoa
+#include <cstdlib>
+#include <iostream>
+#include <iomanip>	// setting precision of output
+#include <sstream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <boost/algorithm/string.hpp>
+#include <boost/tokenizer.hpp>
+#include <limits>	// for double's limit
+
+using namespace std;
+using namespace boost;
+
+/* constant for version, debug and etc */
+const string NumBopDataConv_build_date = __DATE__;
+const string NumBopDataConv_build_time = __TIME__;
+
+vector< vector<string> > coord_list;
+vector< vector<double> > timeslot_list;
+vector< vector<double> > depth_list;
+ofstream o_file_mt, o_file_mv;
+string vertex_info = "";
+string edge_info = "";
+unsigned int row_counter = 0;
+unsigned int movement_group = 0;
+unsigned int mv_within_session = 0;
+
+
+unsigned int get_element_count(){
+	unsigned int element_count = 0;
+	for(unsigned int i=0; i < depth_list.size();i++){
+		element_count += (depth_list[i]).size();
+	}
+//	cout << row_counter << ":" << element_count << endl;
+	return element_count;
+}
+
+void parse_coordinate_element(string s_line, int manipulativeID){
+
+	if(s_line == "") return;
+
+	string s_token;
+
+	char_separator<char> sep_char("_ ");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+
+		size_t comma = s_token.find(",");
+		  if (comma != string::npos){
+		  	s_token.replace(comma, 1, "\t");
+		  }
+		  coord_list[manipulativeID].push_back(s_token);
+	}
+}
+
+void parse_coordinate(string s_line){
+
+	if(row_counter == 0) return;
+	if((s_line == "")||(s_line == "-9")) return;
+
+	string s_token;
+	int manipulativeID = 0;
+
+	char_separator<char> sep_char("| \"");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		coord_list.push_back( vector<string>() );
+		timeslot_list.push_back( vector<double>() );
+		depth_list.push_back( vector<double>() );
+		parse_coordinate_element(s_token, manipulativeID++);
+	}
+}
+
+void create_movelist(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+	unsigned int move_set[2];
+	unsigned int move_set_index =0;
+
+	char_separator<char> sep_char(",");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		move_set[move_set_index++] = atoi(s_token.c_str());
+	}
+//	if(move_set[1] == 1){
+//		o_file_mv << row_counter << "\t" << move_set[0] << "\t"
+//				<< "0" << "\t"
+//				<< coord_list[move_set[0]].at(0);
+//		o_file_mv << "\t" << movement_group << "\t" << mv_within_session++ << endl;
+//	}
+
+//	o_file_mv << row_counter << "\t" << move_set[0] << "\t"
+//			<< move_set[1] << "\t"
+//			<< coord_list[move_set[0]].at(move_set[1]);
+//	o_file_mv << "\t" << movement_group << "\t" << mv_within_session++ << endl;
+
+	while(((timeslot_list[move_set[0]]).size()) < (move_set[1])){
+		(timeslot_list[move_set[0]]).push_back(movement_group);
+	}
+
+//	cerr << "try this..." << move_set[0] << ":" << move_set[1] << endl;
+	if(((timeslot_list[move_set[0]]).size()) > 0){
+		while((((timeslot_list[move_set[0]]).back()) +1) < (movement_group)){
+			cout << (((timeslot_list[move_set[0]]).back()) +1) << ","
+					<< movement_group << ":" << ((timeslot_list[move_set[0]]).size())
+					<< "_" << ((timeslot_list[move_set[0]]).back()) << "," << movement_group << endl;
+			(coord_list[move_set[0]]).push_back((coord_list[move_set[0]]).back());
+			(timeslot_list[move_set[0]]).push_back((timeslot_list[move_set[0]]).back() + 1);
+//			cerr << "here we go" << endl;
+		}
+	}
+
+	(timeslot_list[move_set[0]]).push_back(movement_group);
+
+//	o_file_mv << coord_list[move_set[0]].at(move_set[1]);
+//	o_file_mv << "\t" << movement_group << ".0\t" << endl;
+
+
+//	cout << move_set[0] << "," << move_set[1] << "  "
+//			<< coord_list.size() << "," << (coord_list[move_set[0]]).size() << ":"
+//			<< timeslot_list.size() << "," << (timeslot_list[move_set[0]]).size() << endl;
+
+//	if(move_set[1] == 1){
+//		o_file_mv << coord_list[move_set[0]].at(0);
+//		o_file_mv << "\t" << movement_group << ".0\t" << endl;
+//	}
+//	o_file_mv << coord_list[move_set[0]].at(move_set[1]);
+//	o_file_mv << "\t" << movement_group << ".0\t" << endl;
+
+}
+
+void parse_movement_element(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+
+	char_separator<char> sep_char("_\n");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		create_movelist(s_token);
+	}
+}
+
+void parse_movement(string s_line){
+
+	if(row_counter == 0){
+		o_file_mv << row_counter << "\t" << "manipulativeID" << "\t"
+		    << "moveID_withinManipulativeID" << "\t" << "coord_x" << "\t"
+		    << "coord_y" << "\t" << "movementGroupID" << "\t" << "glovalMovementID"
+		    << endl;
+		return;
+	}
+	if((s_line == "")||(s_line == "-9")) return;
+
+	string s_token;
+	movement_group = 0;
+	mv_within_session = 0;
+
+	char_separator<char> sep_char("|\"");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		parse_movement_element(s_token);
+		movement_group++;
+	}
+}
+
+//void scale_depth(){
+//	double manipulative_max = 0;
+//	double manipulative_muxer = 1;
+//	for(unsigned int i=0; i < timeslot_list.size();i++){
+//		for(unsigned int j=0; j < (timeslot_list[i]).size(); j++){
+//
+//			(depth_list[i]).push_back((timeslot_list[i]).at(j));
+//
+//			if(((depth_list[i]).at(j)) > manipulative_max){
+//				manipulative_max = ((depth_list[i]).at(j));
+//			}
+//		}
+//	}
+//	if(0 == manipulative_max){
+//		manipulative_muxer = 1;
+//	}
+//	else{
+//		manipulative_muxer = 1 / manipulative_max;
+//	}
+//
+//	for(unsigned int i=0; i < depth_list.size();i++){
+//		for(unsigned int j=0; j < (depth_list[i]).size(); j++){
+//			((depth_list[i]).at(j)) = ((depth_list[i]).at(j)) * manipulative_muxer;
+//		}
+//	}
+//}
+
+void scale_depth(){
+	for(unsigned int i=0; i < timeslot_list.size();i++){
+		double manipulative_min = numeric_limits<double>::max( );
+//		cout << manipulative_min << endl;
+		double manipulative_max = 0;
+		double manipulative_diff = 0;
+		double manipulative_muxer = 1;
+		for(unsigned int j=0; j < (timeslot_list[i]).size(); j++){
+
+			(depth_list[i]).push_back((timeslot_list[i]).at(j));
+
+			if(((depth_list[i]).at(j)) > manipulative_max){
+				manipulative_max = ((depth_list[i]).at(j));
+			}
+			if(((depth_list[i]).at(j)) < manipulative_min){
+				manipulative_min = ((depth_list[i]).at(j));
+			}
+		}
+		manipulative_diff = manipulative_max - manipulative_min;
+		if(0 == manipulative_diff){
+			manipulative_muxer = 1;
+		}
+		else{
+			manipulative_muxer = 1 / manipulative_diff;
+		}
+		for(unsigned int j=0; j < (depth_list[i]).size(); j++){
+			((depth_list[i]).at(j)) = (((depth_list[i]).at(j)) -manipulative_min ) * manipulative_muxer;
+		}
+	}
+}
+
+void write_nodelist(){
+
+	for(unsigned int i=0; i < timeslot_list.size();i++){
+		for(unsigned int j=0; j < (timeslot_list[i]).size(); j++){
+
+//			cout << "i" << i << ":j" << j << endl;
+			if((coord_list.size())!=(timeslot_list.size())){
+				cout << "heck...  Err_1st order:"
+						<< "1c:" << coord_list.size() << " <-> 1d:" << timeslot_list.size() << endl;
+				return;
+			}
+
+			if(((coord_list[i]).size())!=((timeslot_list[i]).size())){
+				cout << "heck...  Err_2nd order:"
+						<< "2c:" << (coord_list[i]).size() << " <-> 2d:" << (timeslot_list[i]).size() << endl;
+				return;
+			}
+
+//			cout << (coord_list[i]).at(j) << "\t" << (timeslot_list[i]).at(j) << endl;
+			o_file_mv << (coord_list[i]).at(j) << "\t" << setprecision(2) << (timeslot_list[i]).at(j) << endl;
+
+		}
+	}
+}
+
+void write_edgelist(){
+
+	unsigned int node_index=0;
+
+	o_file_mv << "LINES " << timeslot_list.size() << " "
+			<< get_element_count() + timeslot_list.size() << endl;
+	for(unsigned int i=0; i < timeslot_list.size();i++){
+			o_file_mv << ((timeslot_list[i]).size());
+			for(unsigned int j=0; j < (timeslot_list[i]).size(); j++){
+					o_file_mv << " " << node_index++;
+			}
+			o_file_mv << endl;
+	}
+}
+
+void write_color_list(){
+	o_file_mv << "POINT_DATA " << get_element_count() << endl
+			<< "SCALARS SColor float" << endl
+			<< "LOOKUP_TABLE default" << endl;
+	for(unsigned int i=0; i < depth_list.size();i++){
+		for(unsigned int j=0; j < (depth_list[i]).size(); j++){
+			o_file_mv << setprecision(2) << depth_list[i].at(j) << endl;
+		}
+	}
+}
+
+int main(int argc, char *argv[]){
+
+	cout << "NumBopDataConv build: " << NumBopDataConv_build_date << " " << NumBopDataConv_build_time << endl
+			<< endl;
+
+	string filename_in = argv[1];
+	cout << "input file:" << endl
+			<< filename_in << endl
+			<< endl;
+
+	string filename_omt = filename_in + ".meta";
+	string filename_omv;// = filename_in + ".move";
+	cout << "output file:" << endl
+			<< "meta: " << filename_omt << endl
+//			<< "move: " << filename_omv << endl
+			<< endl;
+
+	ifstream ifstreamFileIn;
+	ifstreamFileIn.open(argv[1]);
+	cout << "-- opening " << argv[1] << endl
+			<< endl;
+	o_file_mt.open(filename_omt.c_str());
+//	o_file_mv.open(filename_omv.c_str());
+
+	string s_line;
+	string s_token;
+	int element_iterator;
+
+	while(ifstreamFileIn){
+//		cout << "RC:" << row_counter << endl;
+		getline(ifstreamFileIn, s_line);
+
+//		/* test section */
+//		vertex_info += s_line;
+//		vertex_info += "\n";
+
+		if(s_line != ""){
+			o_file_mt << row_counter;
+			trim_right_if(s_line,is_any_of("\n\r"));
+			element_iterator = 0;
+			typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+			boost::char_separator<char> sep_char("\t", "", boost::keep_empty_tokens);
+			tokenizer tokens(s_line, sep_char);
+			for(tokenizer::iterator tok_iter = tokens.begin(); tok_iter != tokens.end(); ++tok_iter){
+				s_token = *tok_iter;
+				if(element_iterator == 13){
+//					cout << "-" << s_token << "-" << endl;
+					parse_coordinate(s_token);
+				}
+				else if(element_iterator == 14){
+//					cout << "  -" << s_token << "-" << endl;
+					std::string tmpStrng;
+					std::stringstream tmpStrm;
+					tmpStrm << setfill('0') << setw(4) << row_counter;
+					tmpStrng = tmpStrm.str();
+					filename_omv = filename_in + "." + tmpStrng + ".vtk";
+					o_file_mv.open(filename_omv.c_str());
+					parse_movement(s_token);
+					scale_depth();
+					o_file_mv << "# vtk DataFile Version 2.0" << endl
+							<< "vtk parsed from education data" << endl
+							<< "ASCII" << endl
+							<< endl
+							<< "DATASET POLYDATA" << endl
+							<< "POINTS " << get_element_count() << " float" << endl;
+					write_nodelist();
+					o_file_mv << endl;
+					write_edgelist();
+					o_file_mv << endl;
+					write_color_list();
+					o_file_mv.close();
+				}
+				else{
+					o_file_mt <<
+							"\t" << s_token;
+				}
+				element_iterator++;
+			}
+			coord_list.clear();
+			timeslot_list.clear();
+			depth_list.clear();
+			o_file_mt << endl;
+			row_counter++;
+
+//			cout << "---^" << row_counter-1 << "," << row_counter << "v---------------------" << endl;
+
+		}
+		else{
+			cout << "-- blank line in the data, at: " << row_counter << endl;
+		}
+	}
+
+//	o_file_mt << endl;
+
+	o_file_mt.close();
+//	o_file_mv.close();
+
+	cout << "-- numBopDataconversion finished.  exiting..." << endl;
+
+//	/* test section */
+//	cout << "*** vertex section begin ***"
+//			<< vertex_info
+//			<<  "*** vertex section end ***" << endl;
+
+	return EXIT_SUCCESS;
+}

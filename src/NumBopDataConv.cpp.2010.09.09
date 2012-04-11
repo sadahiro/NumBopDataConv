@@ -1,0 +1,183 @@
+//============================================================================
+// Name        : NumBopAnalysis.cpp
+// Author      : Makoto Sadahiro
+// Version     : build date is automatically updated in the run message
+// Copyright   : Texas Advanced Computing Center
+// Description : Parser from curr NumBop format to something easier to read
+//============================================================================
+
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <string>
+#include <boost/algorithm/string.hpp>
+#include <boost/tokenizer.hpp>
+
+using namespace std;
+using namespace boost;
+
+/* constant for version, debug and etc */
+const string NumBopDataConv_build_date = __DATE__;
+const string NumBopDataConv_build_time = __TIME__;
+
+vector< vector<string> > coord_list;
+ofstream o_file_mt, o_file_mv;
+int row_counter = 0;
+int movement_group = 0;
+
+void parse_coordinate_element(string s_line, int manipulativeID){
+
+	if(s_line == "") return;
+
+	string s_token;
+
+	char_separator<char> sep_char("_ ");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+
+		size_t comma = s_token.find(",");
+		  if (comma != string::npos){
+		  	s_token.replace(comma, 1, "\t");
+		  }
+		  coord_list[manipulativeID].push_back(s_token);
+	}
+}
+
+void parse_coordinate(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+	int manipulativeID = 0;
+
+	char_separator<char> sep_char("| ");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		coord_list.push_back( vector<string>() );
+		parse_coordinate_element(s_token, manipulativeID++);
+	}
+}
+
+void create_movelist(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+	int move_set[2];
+	int move_set_index =0;
+
+	char_separator<char> sep_char(",");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		move_set[move_set_index++] = atoi(s_token.c_str());
+	}
+	if(move_set[1] == 1){
+		o_file_mv << row_counter << "\t" << move_set[0] << "\t" << "0" << "\t"
+				<< coord_list[move_set[0]].at(0) << "\t" << movement_group << endl;
+	}
+	o_file_mv << row_counter << "\t" << move_set[0] << "\t"
+			<< move_set[1] << "\t"
+			<< coord_list[move_set[0]].at(move_set[1]) << "\t" << movement_group << endl;
+}
+
+void parse_movement_element(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+
+	char_separator<char> sep_char("_\n");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		create_movelist(s_token);
+	}
+}
+
+void parse_movement(string s_line){
+
+	if(s_line == "") return;
+
+	string s_token;
+	movement_group = 0;
+
+	char_separator<char> sep_char("|");
+	tokenizer<char_separator<char> > tok(s_line, sep_char);
+	for(tokenizer<char_separator<char> >::iterator beg = tok.begin(); beg != tok.end(); ++beg){
+		s_token = *beg;
+		parse_movement_element(s_token);
+		movement_group++;
+	}
+}
+
+int main(int argc, char *argv[]){
+
+	cout << "NumBopDataConv build: " << NumBopDataConv_build_date << " " << NumBopDataConv_build_time << endl
+			<< endl;
+
+	string filename_in = argv[1];
+	cout << "input file:" << endl
+			<< filename_in << endl
+			<< endl;
+
+	string filename_omt = filename_in + ".meta";
+	string filename_omv = filename_in + ".move";
+	cout << "output file:" << endl
+			<< "meta: " << filename_omt << endl
+			<< "move: " << filename_omv << endl
+			<< endl;
+
+	ifstream ifstreamFileIn;
+	ifstreamFileIn.open(argv[1]);
+	cout << "-- opening " << argv[1] << endl
+			<< endl;
+	o_file_mt.open(filename_omt.c_str());
+	o_file_mv.open(filename_omv.c_str());
+
+	string s_line;
+	string s_token;
+	int element_iterator;
+
+	while(ifstreamFileIn){
+		getline(ifstreamFileIn, s_line);
+		if(s_line != ""){
+			o_file_mt << row_counter << "\t";
+			trim_right_if(s_line,is_any_of("\n\r"));
+			element_iterator = 0;
+			typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+			boost::char_separator<char> sep_char("\t", "", boost::keep_empty_tokens);
+			tokenizer tokens(s_line, sep_char);
+			for(tokenizer::iterator tok_iter = tokens.begin(); tok_iter != tokens.end(); ++tok_iter){
+				s_token = *tok_iter;
+				if(element_iterator == 10){
+					parse_coordinate(s_token);
+				}
+				else if(element_iterator == 11){
+					parse_movement(s_token);
+				}
+				else{
+					o_file_mt <<
+							s_token << "\t";
+				}
+				element_iterator++;
+			}
+			coord_list.clear();
+			o_file_mt << endl;
+			row_counter++;
+		}
+		else{
+			cout << "-- blank line in the data, at: " << row_counter << endl;
+		}
+	}
+
+	o_file_mt.close();
+	o_file_mv.close();
+
+	cout << "-- numBopDataconversion finished.  exiting..." << endl;
+
+	return EXIT_SUCCESS;
+}

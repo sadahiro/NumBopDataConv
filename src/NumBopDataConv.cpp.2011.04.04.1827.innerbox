@@ -1,0 +1,864 @@
+//============================================================================
+// Name        : NumBopAnalysis.cpp
+// Author      : Makoto Sadahiro
+// Version     : build date is automatically updated in the run message
+// Copyright   : Texas Advanced Computing Center
+// Description : Parser from curr NumBop format to something easier to read
+//             : This is a version that includes an global movement ID for each user
+//             : This is new interpretation that stational manupulative has right angle lines
+//             : This is a version that creates vtk ascii format file
+//             : This traces each manipulative with timeline
+//             : rewrite for SelectedAllCarmen0106.cleaned
+//============================================================================
+
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <boost/algorithm/string.hpp>
+#include <boost/tokenizer.hpp>
+//#include <cstdio>	// needed for itoa
+#include <iomanip>	// setting precision of output
+#include <limits>	// for double's limit
+using namespace std;
+using namespace boost;
+
+/* constant for version, debug and etc */
+const string NumBopDataConv_build_date = __DATE__;
+const string NumBopDataConv_build_time = __TIME__;
+
+// set verboseness for debuggingmessage here
+unsigned int verbose =4;
+
+string filename_in;
+string filename_omt;
+ofstream o_file_mt, o_file_mv;
+string vertex_info = "";
+string edge_info = "";
+unsigned int row_counter = 0;
+unsigned int mv_within_session = 0;
+
+vector<vector<string> > coord_list;
+vector<vector<string> > xy_list;
+vector<vector<double> > z_list;
+vector<vector<double> > g_time_list;
+vector<vector<double> > m_depth_list;
+
+vector<unsigned int> row_id;
+vector<unsigned int> obj_id;
+vector<unsigned int> obj_move;
+vector<unsigned int> manip_used;
+vector<unsigned int> area;
+vector<unsigned int> area_used;
+vector<double> X;
+vector<double> Y;
+vector<unsigned int> group;
+vector<unsigned int> order;
+vector<string> last_name;
+vector<string> first_name;
+vector<string> date;
+vector<unsigned int> session;
+vector<unsigned int> num_manipulatives;
+vector<unsigned int> num_groups;
+vector<unsigned int> correct;
+vector<unsigned int> correct_answer;
+vector<unsigned int> answer;
+vector<unsigned int> q_number;
+vector<string> question;
+vector<unsigned int> attempt;
+vector<unsigned int> elapsed_time;
+vector<unsigned int> row_id_dupe;
+vector<unsigned int> object_count;
+vector<unsigned int> max_obj_move;
+vector<unsigned int> move_count;
+vector<unsigned int> area_count;
+vector<unsigned int> corr_areas;
+vector<unsigned int> corr_manips;
+
+double x_0 = 0.0;
+double x_1 = 110.0;
+double x_2 = 245.0;
+double x_3 = 400.0;
+double x_4 = 550.0;
+
+double y_0 = 0.0;
+double y_1 = -115.0;
+double y_2 = -255.0;
+double y_3 = -400.0;
+
+
+unsigned int get_element_count(){
+	unsigned int element_count = 0;
+	for(unsigned int i = 0; i < z_list.size(); i++){
+		element_count += (z_list[i]).size();
+	}
+	return element_count;
+}
+
+void create_xyz_list(){
+
+	string last_xy;
+	double last_z;
+
+	for(unsigned int i = 0; i < g_time_list.size(); i++){
+
+		last_xy = (coord_list[i])[0];
+		xy_list[i].push_back(last_xy);
+
+		last_z = (g_time_list[i])[0];
+		z_list[i].push_back(last_z++);
+
+		for(unsigned int j = 1; j < g_time_list[i].size(); j++){
+			while((((g_time_list[i])[j - 1]) + 1) < (g_time_list[i])[j]){
+				xy_list[i].push_back(last_xy);
+				z_list[i].push_back(last_z++);
+				((g_time_list[i])[j - 1])++;
+			}
+			xy_list[i].push_back((coord_list[i])[j]);
+			z_list[i].push_back((g_time_list[i])[j]);
+			last_xy = xy_list[i].back();
+			last_z = z_list[i].back();
+			last_z++;
+		}
+	}
+
+	for(unsigned int i = 0; i < xy_list.size(); i++){
+		for(unsigned int j = 0; j < xy_list[i].size(); j++){
+			if(xy_list[i].size() != z_list[i].size()){
+				cerr << "error: inconsistent size for xy vs z" << endl;
+			}
+		}
+	}
+}
+
+void scale_m_depth_list(){
+	for(unsigned int i = 0; i < z_list.size(); i++){
+		double manipulative_min = numeric_limits<double>::max();
+		double manipulative_max = 0;
+		double manipulative_diff = 0;
+		double manipulative_muxer = 1;
+		for(unsigned int j = 0; j < (z_list[i]).size(); j++){
+
+			(m_depth_list[i]).push_back((z_list[i]).at(j));
+
+			if(((m_depth_list[i]).at(j)) > manipulative_max){
+				manipulative_max = ((m_depth_list[i]).at(j));
+			}
+			if(((m_depth_list[i]).at(j)) < manipulative_min){
+				manipulative_min = ((m_depth_list[i]).at(j));
+			}
+		}
+		manipulative_diff = manipulative_max - manipulative_min;
+		if(0 == manipulative_diff){
+			manipulative_muxer = 1;
+		}else{
+			manipulative_muxer = 1 / manipulative_diff;
+		}
+		for(unsigned int j = 0; j < (m_depth_list[i]).size(); j++){
+			((m_depth_list[i]).at(j))
+			    = (((m_depth_list[i]).at(j)) - manipulative_min) * manipulative_muxer;
+		}
+	}
+}
+
+void write_nodelist(){
+
+	for(unsigned int i = 0; i < z_list.size(); i++){
+		for(unsigned int j = 0; j < (z_list[i]).size(); j++){
+
+			if((xy_list.size()) != (z_list.size())){
+				cerr << "heck...  Err_1st order:" << "1c:" << xy_list.size()
+				    << " <-> 1d:" << z_list.size() << endl;
+				return;
+			}
+
+			if(((xy_list[i]).size()) != ((z_list[i]).size())){
+				cerr << "heck...  Err_2nd order:" << "2c:" << (xy_list[i]).size()
+				    << " <-> 2d:" << (z_list[i]).size() << endl;
+				return;
+			}
+
+			if(verbose > 1){
+				cout << (xy_list[i]).at(j) << "\t" << setprecision(2)
+				    << (z_list[i]).at(j) << endl;
+				o_file_mv << (xy_list[i]).at(j) << "\t" << setprecision(2)
+				    << (z_list[i]).at(j) << endl;
+			}
+
+		}
+	}
+}
+
+void write_edgelist(){
+
+	unsigned int node_index = 0;
+
+	o_file_mv << "LINES " << z_list.size() << " " << get_element_count()
+	    + z_list.size() << endl;
+	for(unsigned int i = 0; i < z_list.size(); i++){
+		o_file_mv << ((z_list[i]).size());
+		for(unsigned int j = 0; j < (z_list[i]).size(); j++){
+			o_file_mv << " " << node_index++;
+		}
+		o_file_mv << endl;
+	}
+}
+
+void write_color_list(){
+	o_file_mv << "POINT_DATA " << get_element_count() << endl
+	    << "SCALARS SColor float" << endl << "LOOKUP_TABLE default" << endl;
+	for(unsigned int i = 0; i < m_depth_list.size(); i++){
+		for(unsigned int j = 0; j < (m_depth_list[i]).size(); j++){
+			o_file_mv << setprecision(2) << m_depth_list[i].at(j) << endl;
+		}
+	}
+}
+
+void scale_g_time(double z_scale){
+
+	for(unsigned int i = 0; i < g_time_list.size(); i++){
+		for(unsigned int j = 0; j < g_time_list[i].size(); j++){
+			g_time_list[i][j] *= z_scale;
+		}
+	}
+
+}
+
+string d2s(double din){
+
+	stringstream ts_out;
+	string sout;
+	ts_out << din;
+	sout = ts_out.str();
+	return sout;
+}
+
+void add_grid(){
+
+	double max_ts = 0;
+
+	for(unsigned int i = 0; i < g_time_list.size(); i++){
+		for(unsigned int j = 0; j < g_time_list[i].size(); j++){
+			if(g_time_list[i][j] > max_ts){
+				max_ts = g_time_list[i][j];
+			}
+		}
+	}
+	if(verbose > 3){
+		cout << "max_ts: " << max_ts << endl;
+	}
+
+	// coordinates for outer box
+	double gx_min = x_0;
+	double gx_max = x_4;
+	double gy_min = y_0;
+	double gy_max = y_3;
+
+	// left border
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+
+	unsigned int lastv_index = coord_list.size()-1;
+	if(lastv_index != g_time_list.size()-1){
+		cerr << "lastv_index != g_time_list.size()-1" << endl;
+	}
+
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	// bottom border
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	// 3rd outer box
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_max) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	// 4th outer box
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(gx_min) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(gx_max) + "\t" + d2s(gy_min) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	// coordinates for inner box
+	double ix_0 = x_0;
+	double ix_1 = x_1;
+	double ix_2 = x_2;
+	double ix_3 = x_3;
+	double ix_4 = x_4;
+	double iy_0 = y_0;
+	double iy_1 = y_1;
+	double iy_2 = y_2;
+	double iy_3 = y_3;
+
+	// inner 0
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_0) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_1) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_2) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_3) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_1) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+	coord_list.push_back( vector<string> () );
+	xy_list.push_back( vector<string> () );
+	g_time_list.push_back( vector<double> () );
+	z_list.push_back( vector<double> () );
+	m_depth_list.push_back( vector<double> () );
+	lastv_index++;
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(0.0);
+	coord_list[lastv_index].push_back(d2s(ix_4) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+	coord_list[lastv_index].push_back(d2s(ix_3) + "\t" + d2s(iy_2) + "\t");
+	g_time_list[lastv_index].push_back(max_ts);
+
+}
+
+void src_matxrix_to_time_matrix(){
+
+	unsigned int curr_row = 0;
+	unsigned int curr_session_id = row_id[0];
+//	int curr_manip_id = -1;
+
+	while(curr_row < row_counter){
+
+		if(verbose > 1){
+			cout << "> curr_session_id: " << curr_session_id << endl;
+		}
+
+		// open file here
+		std::string tmpStrng;
+		std::stringstream tmpStrm;
+		tmpStrm << setfill('0') << setw(4) << curr_session_id;
+		tmpStrng = tmpStrm.str();
+		string filename_omv;
+//		filename_omv = filename_in + "_" + tmpStrng + ".vtk";
+		filename_omv = "SelectedAllCarmen_" + tmpStrng + ".vtk";
+		o_file_mv.open(filename_omv.c_str());
+
+		//  checking for session ID
+		while(row_id[curr_row] == curr_session_id){
+
+			// load process vector for a row
+			// checking manipulative ID
+			while(obj_id[curr_row] >= coord_list.size()){
+				coord_list.push_back(vector<string> ());
+				xy_list.push_back(vector<string> ());
+				g_time_list.push_back(vector<double> ());
+				z_list.push_back(vector<double> ());
+				m_depth_list.push_back(vector<double> ());
+
+			}
+
+			// xy (negating y here for now)
+			stringstream ts;
+			ts << X[curr_row] << "\t" << Y[curr_row] * -1;
+			coord_list[obj_id[curr_row]].push_back(ts.str());
+			g_time_list[obj_id[curr_row]].push_back(group[curr_row]);
+
+			// update curr row
+			curr_row++;
+		}
+
+		// error check.  display vector
+		if(verbose > 3){
+			cout << endl << "xyz:" << endl;
+			for(unsigned int i = 0; i < coord_list.size(); i++){
+				for(unsigned int j = 0; j < coord_list[i].size(); j++){
+					cout << "(" << coord_list[i][j] << "\t" << setprecision(2)
+					    << g_time_list[i][j] << ") ";
+				}
+				cout << endl;
+			}
+			cout << "------------------" << endl;
+		}
+		// process a session
+		add_grid();
+		scale_g_time(5);  // multiply z value for better view
+		create_xyz_list();
+		scale_m_depth_list();
+
+		// error check.  display vector
+		if(verbose > 2){
+			cout << "xyzm:" << endl;
+			for(unsigned int i = 0; i < xy_list.size(); i++){
+				for(unsigned int j = 0; j < xy_list[i].size(); j++){
+					cout << "(" << xy_list[i][j] << "\t" << setprecision(2)
+					    << z_list[i][j] << "\t" << setprecision(2) << m_depth_list[i][j]
+					    << ") ";
+				}
+				cout << endl;
+			}
+			cout << "------------------" << endl;
+		}
+
+		o_file_mv << "# vtk DataFile Version 2.0" << endl
+		    << "vtk parsed from education data" << endl << "ASCII" << endl << endl
+		    << "DATASET POLYDATA" << endl << "POINTS " << get_element_count()
+		    << " float" << endl;
+
+		write_nodelist();
+		o_file_mv << endl;
+		write_edgelist();
+		o_file_mv << endl;
+		write_color_list();
+
+		if(verbose > 1){
+			cout << endl << "------------------------------------" << endl;
+		}
+
+		// close file here
+		o_file_mv.close();
+
+		// clean vectors
+		for(unsigned int i = 0; i < coord_list.size(); i++){
+			coord_list[i].clear();
+		}
+		for(unsigned int i = 0; i < g_time_list.size(); i++){
+			g_time_list[i].clear();
+		}
+		for(unsigned int i = 0; i < xy_list.size(); i++){
+			xy_list[i].clear();
+		}
+		for(unsigned int i = 0; i < z_list.size(); i++){
+			z_list[i].clear();
+		}
+		for(unsigned int i = 0; i < m_depth_list.size(); i++){
+			m_depth_list[i].clear();
+		}
+		coord_list.clear();
+		g_time_list.clear();
+		xy_list.clear();
+		z_list.clear();
+		m_depth_list.clear();
+
+		// move onto next session (row_id) item
+		curr_session_id = row_id[curr_row];
+
+	}
+}
+
+int main(int argc, char *argv[]){
+
+	cout << "  NumBopDataConv build_date:" << NumBopDataConv_build_date << " "
+	    << NumBopDataConv_build_time << endl << endl;
+
+	filename_in = argv[1];
+	filename_omt = filename_in + ".meta";
+
+	ifstream ifstreamFileIn;
+	ifstreamFileIn.open(argv[1]);
+	cout << "> opening " << filename_in << endl << endl;
+	o_file_mt.open(filename_omt.c_str());
+
+	string s_line;
+	string s_token;
+	string temp_token;
+	bool comma_escape = false;
+	unsigned int element_iterator;
+
+	getline(ifstreamFileIn, s_line);
+
+	while(ifstreamFileIn){
+
+		getline(ifstreamFileIn, s_line);
+		if(s_line != ""){
+			o_file_mt << row_counter + 2;
+			trim_right_if(s_line, is_any_of("\n\r"));
+			element_iterator = 0;
+			typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+			boost::char_separator<char> sep_char(",", "", boost::keep_empty_tokens);
+			tokenizer tokens(s_line, sep_char);
+			for(tokenizer::iterator tok_iter = tokens.begin(); tok_iter
+			    != tokens.end(); ++tok_iter){
+				s_token = *tok_iter;
+
+				switch(element_iterator){
+				case 0:
+					row_id.push_back(atoi(s_token.c_str()));
+					break;
+				case 1:
+					obj_id.push_back(atoi(s_token.c_str()));
+					break;
+				case 2:
+					obj_move.push_back(atoi(s_token.c_str()));
+					break;
+				case 3:
+					manip_used.push_back(atoi(s_token.c_str()));
+					break;
+				case 4:
+					area.push_back(atoi(s_token.c_str()));
+					break;
+				case 5:
+					area_used.push_back(atoi(s_token.c_str()));
+					break;
+				case 6:
+					X.push_back((double)(atof(s_token.c_str())));
+					break;
+				case 7:
+					Y.push_back((double)(atof(s_token.c_str())));
+					break;
+				case 8:
+					group.push_back(atoi(s_token.c_str()));
+					break;
+				case 9:
+					order.push_back(atoi(s_token.c_str()));
+					break;
+				case 10:
+					last_name.push_back(s_token);
+					break;
+				case 11:
+					first_name.push_back(s_token);
+					break;
+				case 12:
+					date.push_back(s_token);
+					break;
+				case 13:
+					session.push_back(atoi(s_token.c_str()));
+					break;
+				case 14:
+					num_manipulatives.push_back(atoi(s_token.c_str()));
+					break;
+				case 15:
+					num_groups.push_back(atoi(s_token.c_str()));
+					break;
+				case 16:
+					correct.push_back(atoi(s_token.c_str()));
+					break;
+				case 17:
+					correct_answer.push_back(atoi(s_token.c_str()));
+					break;
+				case 18:
+					answer.push_back(atoi(s_token.c_str()));
+					break;
+				case 19:
+					q_number.push_back(atoi(s_token.c_str()));
+					break;
+				case 20:
+					if(s_token[0] == '\"'){
+						comma_escape = true;
+						if((s_token[s_token.length() - 1]) == '\"'){
+							comma_escape = false;
+							question.push_back(s_token);
+						}else{
+							temp_token = s_token + ",";
+							element_iterator--;
+						}
+					}else if((s_token[s_token.length() - 1]) == '\"'){
+						comma_escape = false;
+						temp_token += s_token;
+						question.push_back(temp_token);
+					}else{
+						if(comma_escape == true){
+							temp_token = s_token + ",";
+						}else{
+							question.push_back(s_token);
+						}
+					}
+					break;
+				case 21:
+					attempt.push_back(atoi(s_token.c_str()));
+					break;
+				case 22:
+					elapsed_time.push_back(atoi(s_token.c_str()));
+					break;
+				case 23:
+					row_id_dupe.push_back(atoi(s_token.c_str()));
+					break;
+				case 24:
+					object_count.push_back(atoi(s_token.c_str()));
+					break;
+				case 25:
+					max_obj_move.push_back(atoi(s_token.c_str()));
+					break;
+				case 26:
+					move_count.push_back(atoi(s_token.c_str()));
+					break;
+				case 27:
+					area_count.push_back(atoi(s_token.c_str()));
+					break;
+				case 28:
+					corr_areas.push_back(atoi(s_token.c_str()));
+					break;
+				case 29:
+					corr_manips.push_back(atoi(s_token.c_str()));
+					break;
+				default:
+					o_file_mt << "* error parsing input file to source matrix at line "
+					    << row_counter + 2 << endl;
+					cerr << "* error parsing input file to source matrix at line "
+					    << row_counter + 2 << endl;
+				}
+
+				element_iterator++;
+			}
+
+			o_file_mt << endl;
+			row_counter++;
+
+		}else{
+			cout << "> empty line at: " << row_counter + 2 << endl;
+		}
+	} // while(stream)
+
+	cout << "> end of file at: " << row_counter + 2 << endl;
+
+	o_file_mt << endl;
+
+	// end of reading file
+	// starting to parse in 3D space
+
+	src_matxrix_to_time_matrix();
+
+	// test section for valid source matrix
+	//	for(unsigned int i=0; i<row_counter; i++){
+	//		cout << i + 2 << ": " << row_id[i] << ", " << obj_id[i] << ", "
+	//				<< X[i] << ", " << Y[i] << ", " << q_number[i] << ", " << question[i] << endl;
+	//	}
+	//	for(unsigned int j=0; j<question.size(); j++){
+	//		cout << j << ": " << question[j] << endl;
+	//	}
+
+	row_id.clear();
+	obj_id.clear();
+	obj_move.clear();
+	manip_used.clear();
+	area.clear();
+	area_used.clear();
+	X.clear();
+	Y.clear();
+	group.clear();
+	order.clear();
+	last_name.clear();
+	first_name.clear();
+	date.clear();
+	session.clear();
+	num_manipulatives.clear();
+	num_groups.clear();
+	correct.clear();
+	correct_answer.clear();
+	answer.clear();
+	q_number.clear();
+	question.clear();
+	attempt.clear();
+	elapsed_time.clear();
+	row_id_dupe.clear();
+	object_count.clear();
+	max_obj_move.clear();
+	move_count.clear();
+	area_count.clear();
+	corr_areas.clear();
+	corr_manips.clear();
+
+	o_file_mt.close();
+	cout << "> metadata file: " << filename_in << " closed" << endl
+	    << "> numBopDataconversion finished.  exiting" << endl;
+
+	return EXIT_SUCCESS;
+}
